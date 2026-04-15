@@ -2,8 +2,9 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go_fig
 from datetime import datetime
-import io
-import os
+import io, os, json
+from db import (db_available, save_session, load_session, list_sessions,
+                delete_session, save_produit, list_produits, all_produits_for_vendeur)
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -50,6 +51,47 @@ VERDICT_COLORS = {
     "⏳ SURVEILLER":"E67E22","❌ NE PAS TESTER":"C0392B",
     "🔴 ABANDONNER":"7F8C8D","🚫 BUDGET PUB BLOQUÉ":"C0392B",
 }
+
+# ── SAVE / LOAD HELPERS ─────────────────────────────────────────────
+SAVE_KEYS = [
+    "etape","vendeur","produits_liste",
+    "produit","lien_fournisseur","sous_niche","probleme","cible","benefice",
+    "gt_go","gt_kw1","gt_kw2","gt_note",
+    "bsr_go","bsr_note","wh_go","wh_note","minea_go","minea_note",
+    "scores","source","commentaire",
+]
+
+def build_save():
+    """Serialize saveable session state to JSON bytes."""
+    data = {}
+    for k in SAVE_KEYS:
+        val = st.session_state.get(k)
+        # Convert bool None to string for JSON safety
+        if val is None:
+            data[k] = "__None__"
+        else:
+            data[k] = val
+    data["_saved_at"] = datetime.now().strftime("%d/%m/%Y %H:%M")
+    return json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+
+def restore_save(raw: bytes):
+    """Load JSON bytes back into session state."""
+    try:
+        data = json.loads(raw.decode("utf-8"))
+        for k in SAVE_KEYS:
+            if k in data:
+                val = data[k]
+                if val == "__None__":
+                    st.session_state[k] = None
+                elif k == "scores" and isinstance(val, dict):
+                    st.session_state[k] = val
+                elif k == "produits_liste" and isinstance(val, list):
+                    st.session_state[k] = val
+                else:
+                    st.session_state[k] = val
+        return data.get("_saved_at", "?")
+    except Exception as e:
+        return f"ERREUR: {e}"
 
 def banner(text, bg=NAVY):
     st.markdown(
@@ -138,6 +180,114 @@ with st.sidebar:
     for i, p in enumerate(st.session_state.produits_liste, 1):
         col = GREEN if any(x in p["verdict"] for x in ["PRIORITAIRE","PRUDENT"]) else RED
         st.markdown(f"<p style='font-size:.82rem;margin:2px 0;'><b style='color:{NAVY};'>#{i}</b> {p['produit'][:20]}<br><span style='color:{col};font-weight:700;'>{p['score']}/100</span></p>", unsafe_allow_html=True)
+
+    # ── SAUVEGARDE ──────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown(f"<p style='color:{GOLD};font-weight:700;margin-bottom:4px;'>💾 SAUVEGARDE</p>",
+                unsafe_allow_html=True)
+
+    if db_available():
+        # ── MODE BASE DE DONNÉES (Supabase) ─────────────────────────
+        col_save, col_load = st.columns(2)
+        with col_save:
+            if st.button("💾 Sauvegarder", use_container_width=True,
+                         help="Sauvegarde dans la base de données"):
+                if not st.session_state.vendeur:
+                    st.warning("Remplis le nom du vendeur d'abord.")
+                else:
+                    state_dict = {k: st.session_state.get(k)
+                                  for k in ["vendeur","etape","produit","lien_fournisseur",
+                                            "sous_niche","probleme","cible","benefice",
+                                            "gt_go","gt_kw1","gt_kw2","gt_note",
+                                            "bsr_go","bsr_note","wh_go","wh_note",
+                                            "minea_go","minea_note","scores",
+                                            "source","commentaire","_session_id"]}
+                    sid = save_session(state_dict)
+                    if sid:
+                        st.session_state["_session_id"] = sid
+                        st.success("✅ Sauvegardé !")
+                    else:
+                        st.error("Échec sauvegarde")
+
+        with col_load:
+            if st.button("📂 Mes sessions", use_container_width=True,
+                         help="Voir et reprendre les sessions existantes"):
+                st.session_state["_show_sessions"] = not st.session_state.get("_show_sessions", False)
+
+        # Panel sessions
+        if st.session_state.get("_show_sessions", False):
+            sessions = list_sessions(limit=15)
+            if not sessions:
+                st.info("Aucune session sauvegardée.")
+            else:
+                st.markdown(f"<p style='font-size:.8rem;color:{GOLD};font-weight:600;'>Sélectionne une session :</p>",
+                            unsafe_allow_html=True)
+                for s in sessions:
+                    updated = s.get("updated_at","")[:16].replace("T"," ")
+                    label   = f"{s['vendeur']} · étape {s['etape']} · {updated}"
+                    produit_info = f" — {s['produit']}" if s.get("produit") else ""
+                    col_s, col_d = st.columns([4,1])
+                    with col_s:
+                        if st.button(f"▶ {label}{produit_info}",
+                                     key=f"load_{s['id']}", use_container_width=True):
+                            data = load_session(s["id"])
+                            if data:
+                                for k in ["vendeur","etape","produit","lien_fournisseur",
+                                          "sous_niche","probleme","cible","benefice",
+                                          "gt_go","gt_kw1","gt_kw2","gt_note",
+                                          "bsr_go","bsr_note","wh_go","wh_note",
+                                          "minea_go","minea_note","scores",
+                                          "source","commentaire"]:
+                                    if k in data:
+                                        st.session_state[k] = data[k]
+                                st.session_state["_session_id"] = s["id"]
+                                # Recharge aussi les produits de cette session
+                                prods_db = list_produits(s["id"])
+                                if prods_db:
+                                    st.session_state.produits_liste = []
+                                    for p_db in prods_db:
+                                        p_flat = dict(p_db)
+                                        scores = p_flat.pop("scores", {})
+                                        p_flat.update(scores)
+                                        p_flat["_produit_id"] = p_flat.pop("id", None)
+                                        st.session_state.produits_liste.append(p_flat)
+                                st.session_state["_show_sessions"] = False
+                                st.success(f"✅ Session {s['vendeur']} restaurée !")
+                                st.rerun()
+                    with col_d:
+                        if st.button("🗑", key=f"del_{s['id']}",
+                                     help="Supprimer cette session"):
+                            delete_session(s["id"])
+                            st.rerun()
+
+        # Indicateur session active
+        if st.session_state.get("_session_id"):
+            sid_short = str(st.session_state["_session_id"])[:8]
+            st.markdown(
+                f"<p style='color:#1A7A3A;font-size:.75rem;margin-top:4px;'>"
+                f"🟢 Session active : ...{sid_short}</p>",
+                unsafe_allow_html=True)
+
+    else:
+        # ── MODE FALLBACK JSON (si Supabase non configuré) ───────────
+        st.caption("⚠️ Base de données non configurée — mode fichier JSON")
+        vendeur_slug = (st.session_state.vendeur or "session").replace(" ","_")[:15]
+        ts_save = datetime.now().strftime("%Y%m%d_%H%M")
+        save_bytes = build_save()
+        st.download_button(
+            "⬇️ Sauvegarder (JSON)",
+            data=save_bytes,
+            file_name=f"ECRA_{vendeur_slug}_{ts_save}.json",
+            mime="application/json",
+            use_container_width=True,
+        )
+        uploaded_save = st.file_uploader("📂 Reprendre", type=["json"],
+                                          label_visibility="collapsed")
+        if uploaded_save:
+            saved_at = restore_save(uploaded_save.read())
+            if "ERREUR" not in str(saved_at):
+                st.success(f"✅ Session du {saved_at} restaurée !")
+                st.rerun()
 
 # ═══════════════════════════════════════════════════════════════════
 # ÉTAPE 1
@@ -542,6 +692,21 @@ elif st.session_state.etape == 7:
             else:
                 st.session_state.produits_liste.append(cur_p)
                 st.success(f"✅ **{st.session_state.produit}** ajouté — {len(st.session_state.produits_liste)} produit(s) en session.")
+
+            # Auto-save session + produit en DB
+            if db_available():
+                state_dict = {k: st.session_state.get(k)
+                              for k in ["vendeur","etape","produit","lien_fournisseur",
+                                        "sous_niche","probleme","cible","benefice",
+                                        "gt_go","gt_kw1","gt_kw2","gt_note",
+                                        "bsr_go","bsr_note","wh_go","wh_note",
+                                        "minea_go","minea_note","scores",
+                                        "source","commentaire","_session_id"]}
+                sid = save_session(state_dict)
+                if sid:
+                    st.session_state["_session_id"] = sid
+                    cur_p["vendeur"] = st.session_state.vendeur or ""
+                    save_produit(sid, cur_p)
             reset_product()
 
     with col_exp:
