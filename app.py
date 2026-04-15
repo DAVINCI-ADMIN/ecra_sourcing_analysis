@@ -135,19 +135,31 @@ def nav(n): st.session_state.etape = n; st.rerun()
 
 # CSS
 st.markdown(f"""<style>
-/* Cache la barre du haut (Deploy, menu) */
 header[data-testid="stHeader"] {{display: none !important;}}
 #MainMenu {{display: none !important;}}
 footer {{display: none !important;}}
-/* Descend le contenu pour ne pas coller au bord */
-.block-container {{
-    padding-top: 2rem !important;
-    padding-bottom: 2rem !important;
-}}
+.block-container {{padding-top: 2rem !important; padding-bottom: 2rem !important;}}
 .main{{background:#F8F9FC}}
 h1,h2,h3{{color:{NAVY}}}
 .stButton>button{{background:{NAVY};color:white;border-radius:6px;border:none;padding:.45rem 1.4rem;font-weight:600}}
 .stButton>button:hover{{background:{GOLD};color:{NAVY}}}
+/* Force sidebar always open */
+section[data-testid="stSidebar"] {{
+    display: block !important;
+    visibility: visible !important;
+    width: 18rem !important;
+    min-width: 18rem !important;
+    transform: none !important;
+    position: relative !important;
+}}
+section[data-testid="stSidebar"] > div {{
+    width: 18rem !important;
+}}
+/* Hide collapse button */
+button[data-testid="collapsedControl"],
+button[kind="headerNoPadding"] {{
+    display: none !important;
+}}
 </style>""", unsafe_allow_html=True)
 
 # ── SIDEBAR ─────────────────────────────────────────────────────────
