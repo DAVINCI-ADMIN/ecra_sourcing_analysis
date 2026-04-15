@@ -75,6 +75,7 @@ PROD_DEF = dict(
     minea_go=None, minea_note="",
     scores={k: 0 for k, *_ in SCORING_CRITERIA},
     source="", commentaire="", trends_data=None,
+    trends_regions=None, trends_interest=None,
 )
 if "etape"          not in st.session_state: st.session_state.etape = 1
 if "vendeur"        not in st.session_state: st.session_state.vendeur = ""
@@ -172,18 +173,49 @@ elif st.session_state.etape == 2:
         if not st.session_state.gt_kw1 or not st.session_state.gt_kw2:
             st.error("Les deux mots-clés sont obligatoires — un en français, un en anglais.")
         else:
-            with st.spinner("Connexion à Google Trends..."):
+            with st.spinner("Connexion à Google Trends (mondial)..."):
                 try:
                     from pytrends.request import TrendReq
                     pt = TrendReq(hl="fr-FR", tz=360, timeout=(10,25), retries=2, backoff_factor=0.5)
                     kws = [st.session_state.gt_kw1.strip(), st.session_state.gt_kw2.strip()]
-                    pt.build_payload(kws, cat=0, timeframe="today 12-m", geo="FR", gprop="")
-                    df = pt.interest_over_time().drop(columns=["isPartial"], errors="ignore")
-                    if df.empty: st.warning("Aucune donnée. Essaie des termes plus génériques."); st.session_state.trends_data = None
-                    else: st.session_state.trends_data = df; st.success("Données récupérées !")
+                    kw_en = kws[1]
+
+                    # Courbe mondiale 12 mois
+                    pt.build_payload(kws, cat=0, timeframe="today 12-m", geo="", gprop="")
+                    df_world = pt.interest_over_time().drop(columns=["isPartial"], errors="ignore")
+
+                    # Top pays sur mot-clé anglais
+                    pt.build_payload([kw_en], cat=0, timeframe="today 12-m", geo="", gprop="")
+                    df_regions = pt.interest_by_region(resolution="COUNTRY", inc_low_vol=False, inc_geo_code=True)
+                    df_regions = df_regions[df_regions[kw_en] > 0].sort_values(kw_en, ascending=False)
+
+                    # Intérêt par pays clés
+                    interest = {}
+                    for geo_code, label in [("US","🇺🇸 USA"),("FR","🇫🇷 France"),
+                                             ("BE","🇧🇪 Belgique"),("CH","🇨🇭 Suisse"),("DE","🇩🇪 Allemagne")]:
+                        try:
+                            pt.build_payload([kw_en], cat=0, timeframe="today 12-m", geo=geo_code, gprop="")
+                            dc = pt.interest_over_time().drop(columns=["isPartial"], errors="ignore")
+                            interest[label] = int(dc[kw_en].mean()) if not dc.empty else 0
+                        except:
+                            interest[label] = 0
+
+                    if df_world.empty:
+                        st.warning("Aucune donnée mondiale. Essaie des termes plus génériques.")
+                        st.session_state.trends_data = None
+                        st.session_state.trends_regions = None
+                        st.session_state.trends_interest = None
+                    else:
+                        st.session_state.trends_data = df_world
+                        st.session_state.trends_regions = df_regions
+                        st.session_state.trends_interest = interest
+                        st.success("Données mondiales récupérées !")
                 except Exception as err:
                     st.warning(f"Google Trends indisponible : {str(err)[:120]}\n\nUtilise le lien manuel ci-dessous.")
                     st.session_state.trends_data = None
+                    st.session_state.trends_regions = None
+                    st.session_state.trends_interest = None
+
     if st.session_state.trends_data is not None:
         df = st.session_state.trends_data
         fig = go_fig.Figure()
@@ -192,18 +224,67 @@ elif st.session_state.etape == 2:
                 line=dict(color=[NAVY,GOLD][i%2], width=2.5),
                 fill="tozeroy" if i==0 else None, fillcolor="rgba(30,39,97,0.08)"))
         h1 = df.iloc[:len(df)//2].mean().mean(); h2 = df.iloc[len(df)//2:].mean().mean()
-        fig.update_layout(title="Intérêt (France, 12 mois)", xaxis_title="Date",
-            yaxis_title="Intérêt (0-100)", plot_bgcolor="white", paper_bgcolor="white", height=320,
+        fig.update_layout(title="Intérêt mondial au fil du temps (12 mois)", xaxis_title="Date",
+            yaxis_title="Intérêt (0-100)", plot_bgcolor="white", paper_bgcolor="white", height=300,
             legend=dict(orientation="h", yanchor="bottom", y=1.02))
         st.plotly_chart(fig, use_container_width=True)
-        if h2 > h1 * 1.05: st.success(f"📈 Tendance montante — 2e semestre +{((h2/h1)-1)*100:.0f}% vs 1er")
-        else: st.warning("📉 Tendance plate ou déclinante")
+        if h2 > h1 * 1.05: st.success(f"📈 Tendance mondiale montante — 2e semestre +{((h2/h1)-1)*100:.0f}% vs 1er")
+        else: st.warning("📉 Tendance mondiale plate ou déclinante")
+
+        # Top pays + USA vs EU
+        col_left, col_right = st.columns(2)
+
+        with col_left:
+            st.markdown(f"<b style='color:{NAVY};'>🌍 Top 5 pays (intérêt mondial)</b>", unsafe_allow_html=True)
+            df_r = st.session_state.get("trends_regions")
+            if df_r is not None and not df_r.empty:
+                kw_en = st.session_state.gt_kw2.strip()
+                for rank, (idx, row) in enumerate(df_r.head(5).iterrows(), 1):
+                    score = int(row[kw_en])
+                    medal = ["🥇","🥈","🥉","4️⃣","5️⃣"][rank-1]
+                    st.markdown(
+                        f"<div style='margin-bottom:6px;'>"
+                        f"<span style='color:{DGRAY};font-size:.9rem;'>{medal} <b>{idx}</b></span><br>"
+                        f"<div style='background:#E0E4F0;border-radius:4px;height:7px;'>"
+                        f"<div style='width:{score}%;background:{NAVY};height:7px;border-radius:4px;'></div></div>"
+                        f"<span style='color:#888;font-size:.78rem;'>{score}/100</span></div>",
+                        unsafe_allow_html=True)
+
+        with col_right:
+            st.markdown(f"<b style='color:{NAVY};'>📊 Potentiel USA → Europe</b>", unsafe_allow_html=True)
+            interest = st.session_state.get("trends_interest", {})
+            if interest:
+                usa = interest.get("🇺🇸 USA", 0)
+                eu  = {k: v for k, v in interest.items() if k != "🇺🇸 USA"}
+                eu_avg = int(sum(eu.values()) / len(eu)) if eu else 0
+                usa_c = GREEN if usa >= 50 else ("#E67E22" if usa >= 25 else RED)
+                st.markdown(
+                    f"<div style='background:#EEF0FA;border-radius:8px;padding:10px 14px;margin-bottom:8px;'>"
+                    f"<b style='color:{NAVY};'>🇺🇸 USA</b><br>"
+                    f"<span style='font-size:1.6rem;font-weight:800;color:{usa_c};'>{usa}</span>"
+                    f"<span style='color:#888;'>/100</span></div>",
+                    unsafe_allow_html=True)
+                for label, score in eu.items():
+                    c = GREEN if score >= 50 else ("#E67E22" if score >= 25 else RED)
+                    st.markdown(
+                        f"<div style='display:flex;justify-content:space-between;padding:4px 8px;"
+                        f"margin-bottom:4px;background:#F8F9FC;border-radius:6px;'>"
+                        f"<span style='color:{DGRAY};font-size:.88rem;'>{label}</span>"
+                        f"<b style='color:{c};'>{score}/100</b></div>",
+                        unsafe_allow_html=True)
+                st.markdown("---")
+                if usa >= 60 and eu_avg >= 30:
+                    st.success(f"✅ Fort potentiel de transfert — USA {usa}/100 · EU moy. {eu_avg}/100")
+                elif usa >= 40 and eu_avg >= 15:
+                    st.warning(f"⚠️ Transfert possible — USA {usa}/100 · EU moy. {eu_avg}/100 — à surveiller")
+                else:
+                    st.error(f"❌ Transfert risqué — USA {usa}/100 · EU moy. {eu_avg}/100")
     with st.expander("📖 Vérification manuelle (si fetch échoue)"):
         kw1 = st.session_state.gt_kw1.strip() if st.session_state.gt_kw1 else ""
         kw2 = st.session_state.gt_kw2.strip() if st.session_state.gt_kw2 else ""
         if kw1:
             q = (kw1 + ("," + kw2 if kw2 else "")).replace(" ", "+")
-            url = f"https://trends.google.fr/trends/explore?q={q}&geo=FR&date=today+12-m"
+            url = f"https://trends.google.fr/trends/explore?q={q}&date=today+12-m"
             st.markdown(f"[🔗 Ouvrir Google Trends]({url})")
             st.caption("Si tu vois 'Pas assez de données' : utilise un terme plus court et plus générique (ex: 'collier chien' au lieu de 'collier anti aboiement chien électrique').")
         st.markdown("""
