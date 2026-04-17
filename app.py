@@ -52,6 +52,147 @@ VERDICT_COLORS = {
     "🔴 ABANDONNER":"7F8C8D","🚫 BUDGET PUB BLOQUÉ":"C0392B",
 }
 
+SCORE_KEYS = ["demande_marche","potentiel_pub","marge_brute","momentum_tendance",
+              "saturation","faisabilite_logistique","differenciation",
+              "brandabilite","scalabilite","private_label"]
+
+def normalize_produit(p: dict) -> dict:
+    """Aplatit les scores JSONB de Supabase ou laisse intact si déjà plat."""
+    out = dict(p)
+    scores = out.pop("scores", {}) or {}
+    if isinstance(scores, dict):
+        for k in SCORE_KEYS:
+            if k not in out:
+                out[k] = scores.get(k, 0)
+    for k in SCORE_KEYS:
+        if k not in out:
+            out[k] = 0
+    if "date" not in out:
+        out["date"] = out.get("created_at", datetime.now().strftime("%d/%m/%Y %H:%M"))
+        if out["date"] and "T" in str(out["date"]):
+            out["date"] = str(out["date"])[:16].replace("T", " ")
+    for field in ["produit","lien_fournisseur","sous_niche","probleme","cible","benefice",
+                  "gt","gt_kw1","gt_kw2","bsr","wh","minea","pre_screen",
+                  "verdict","source","commentaire"]:
+        if field not in out:
+            out[field] = ""
+    if "score" not in out:
+        out["score"] = sum(out.get(k, 0) for k in SCORE_KEYS)
+    return out
+
+def build_excel(produits: list, vendeur: str) -> io.BytesIO:
+    """Génère le fichier Excel ECRA et retourne un BytesIO."""
+    def fx(h): return PatternFill("solid", start_color=h, fgColor=h)
+    def fb(bold=False, color="FFFFFF", size=9): return Font(name="Arial", bold=bold, color=color, size=size)
+    def fd():
+        s = Side(style="thin", color="BBBBBB")
+        return Border(left=s, right=s, top=s, bottom=s)
+    def fc(): return Alignment(horizontal="center", vertical="center", wrap_text=True)
+    def fl(): return Alignment(horizontal="left",   vertical="center", wrap_text=True)
+
+    prods = [normalize_produit(p) for p in produits]
+    wb = Workbook()
+
+    # ── Onglet Scoring ──────────────────────────────────────────────
+    ws = wb.active; ws.title = "Scoring"
+    ws.sheet_view.showGridLines = False
+
+    ws.merge_cells("A1:AB1")
+    ws["A1"].value = f"RAPPORT D'ANALYSE — {vendeur} | Niche Chien 2026 | ECRA"
+    ws["A1"].font = fb(True, size=13); ws["A1"].fill = fx("1E2761"); ws["A1"].alignment = fc()
+    ws.row_dimensions[1].height = 34
+
+    ws.merge_cells("A2:AB2")
+    ws["A2"].value = f"Généré le {datetime.now().strftime('%d/%m/%Y %H:%M')} | {len(prods)} produit(s)"
+    ws["A2"].font = Font(name="Arial", italic=True, color="D4A843", size=9)
+    ws["A2"].fill = fx("1E2761"); ws["A2"].alignment = fl()
+    ws.row_dimensions[2].height = 18
+
+    for rng, lbl, bg, fg in [
+        ("A3:F3",  "A — IDENTIFICATION",  "1E2761","FFFFFF"),
+        ("G3:M3",  "B — PRÉ-SCREENING",   "D4A843","1E2761"),
+        ("N3:W3",  "C — SCORING /100",    "2C3E50","FFFFFF"),
+        ("X3:Y3",  "D — RÉSULTAT",        "1A7A3A","FFFFFF"),
+        ("Z3:AB3", "E — NOTES",           "546E7A","FFFFFF"),
+    ]:
+        ws.merge_cells(rng); c = ws[rng.split(":")[0]]
+        c.value = lbl; c.font = fb(True, fg, 8)
+        c.fill = fx(bg); c.alignment = fc(); c.border = fd()
+    ws.row_dimensions[3].height = 20
+
+    hdrs = ["Produit","Lien fournisseur","Sous-niche","Problème résolu","Cible client","Bénéfice principal",
+            "① Google Trends","Mot-clé #1","Mot-clé #2","② Amazon BSR","③ WinningHunter","④ Minea","Pré-screen",
+            "Demande marché /20","Potentiel pub /15","Marge brute /15","Momentum /10",
+            "Saturation /10","Faisabilité /10","Différenciation /5","Brandabilité /5",
+            "Scalabilité /5","PL /5","Score /100","Verdict","Source","Commentaire","Date"]
+    bg_h = {**{i:"1E2761" for i in range(1,7)}, **{i:"D4A843" for i in range(7,14)},
+            **{i:"2C3E50" for i in range(14,24)}, **{i:"1A7A3A" for i in range(24,26)},
+            **{i:"546E7A" for i in range(26,29)}}
+    fg_h = {i:("1E2761" if bg_h.get(i)=="D4A843" else "FFFFFF") for i in range(1,29)}
+    for i, h in enumerate(hdrs, 1):
+        c = ws[f"{get_column_letter(i)}4"]; c.value = h
+        c.font = fb(True, fg_h.get(i,"FFFFFF"), 8)
+        c.fill = fx(bg_h.get(i,"2C3E50")); c.alignment = fc(); c.border = fd()
+    ws.row_dimensions[4].height = 28
+
+    left_ci = {1,2,4,5,6,8,9,26,27,28}
+    for ri, p in enumerate(prods, 5):
+        row_d = [p["produit"], p["lien_fournisseur"], p["sous_niche"], p["probleme"],
+                 p["cible"], p["benefice"], p.get("gt",""), p.get("gt_kw1",""),
+                 p.get("gt_kw2",""), p.get("bsr",""), p.get("wh",""),
+                 p.get("minea",""), p.get("pre_screen",""),
+                 p["demande_marche"], p["potentiel_pub"], p["marge_brute"],
+                 p["momentum_tendance"], p["saturation"], p["faisabilite_logistique"],
+                 p["differenciation"], p["brandabilite"], p["scalabilite"],
+                 p["private_label"], p["score"], p["verdict"],
+                 p.get("source",""), p.get("commentaire",""), p.get("date","")]
+        bg_r = "F0F2F8" if ri % 2 == 0 else "FFFFFF"
+        for ci, val in enumerate(row_d, 1):
+            c = ws[f"{get_column_letter(ci)}{ri}"]
+            c.value = val; c.border = fd()
+            c.fill = fx(bg_r); c.font = fb(False, "2C3E50", 9)
+            c.alignment = fl() if ci in left_ci else fc()
+        vc = VERDICT_COLORS.get(p["verdict"], "2C3E50")
+        ws[f"X{ri}"].font = fb(True,"FFFFFF",11); ws[f"X{ri}"].fill = fx(vc)
+        ws[f"Y{ri}"].font = fb(True,"FFFFFF",9);  ws[f"Y{ri}"].fill = fx(vc)
+        ws.row_dimensions[ri].height = 22
+
+    if prods:
+        ws.conditional_formatting.add(f"X5:X{4+len(prods)}", ColorScaleRule(
+            start_type="num", start_value=0,  start_color="C0392B",
+            mid_type="num",   mid_value=65,   mid_color="F39C12",
+            end_type="num",   end_value=100,  end_color="27AE60"))
+
+    for i, w in enumerate([22,26,15,20,15,20,12,15,15,12,14,12,18,
+                            10,10,10,10,10,10,9,9,9,10,12,22,22,30,14], 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    ws.freeze_panes = "A5"
+
+    # ── Onglet Résumé ────────────────────────────────────────────────
+    ws2 = wb.create_sheet("Résumé"); ws2.sheet_view.showGridLines = False
+    ws2.merge_cells("A1:F1"); ws2["A1"].value = f"RÉSUMÉ — {vendeur}"
+    ws2["A1"].font = fb(True, size=12); ws2["A1"].fill = fx("1E2761"); ws2["A1"].alignment = fc()
+    ws2.row_dimensions[1].height = 30
+    for i, h in enumerate(["Produit","Sous-niche","Score /100","Verdict","Pré-screen","Date"], 1):
+        c = ws2[f"{get_column_letter(i)}2"]; c.value = h
+        c.font = fb(True); c.fill = fx("2C3E50"); c.alignment = fc(); c.border = fd()
+    ws2.row_dimensions[2].height = 22
+    for ri, p in enumerate(prods, 3):
+        vc = VERDICT_COLORS.get(p["verdict"], "2C3E50")
+        for ci, val in enumerate([p["produit"], p["sous_niche"], p["score"],
+                                   p["verdict"], p.get("pre_screen",""), p.get("date","")], 1):
+            c = ws2[f"{get_column_letter(ci)}{ri}"]; c.value = val; c.border = fd()
+            c.font = fb(ci in [3,4], "FFFFFF" if ci in [3,4] else "2C3E50", 9)
+            c.fill = fx(vc) if ci in [3,4] else fx("F0F2F8" if ri%2==0 else "FFFFFF")
+            c.alignment = fc()
+        ws2.row_dimensions[ri].height = 20
+    for i, w in enumerate([24,18,12,22,18,16], 1):
+        ws2.column_dimensions[get_column_letter(i)].width = w
+
+    buf = io.BytesIO()
+    wb.save(buf); buf.seek(0)
+    return buf
+
 # ── SAVE / LOAD HELPERS ─────────────────────────────────────────────
 SAVE_KEYS = [
     "etape","vendeur","produits_liste",
@@ -300,6 +441,59 @@ with st.sidebar:
             if "ERREUR" not in str(saved_at):
                 st.success(f"✅ Session du {saved_at} restaurée !")
                 st.rerun()
+
+    # ── EXPORT EXCEL FIXE ───────────────────────────────────────────
+    st.markdown("---")
+    st.markdown(f"<p style='color:{GOLD};font-weight:700;margin-bottom:4px;'>📊 EXPORT EXCEL</p>",
+                unsafe_allow_html=True)
+
+    if db_available():
+        sessions_all = list_sessions(limit=50)
+        vendeurs_db  = sorted(set(s["vendeur"] for s in sessions_all if s.get("vendeur")))
+        if st.session_state.vendeur and st.session_state.vendeur not in vendeurs_db:
+            vendeurs_db = [st.session_state.vendeur] + vendeurs_db
+
+        if vendeurs_db:
+            vendeur_export = st.selectbox(
+                "Vendeur", vendeurs_db, key="export_vendeur_select",
+                label_visibility="collapsed"
+            )
+            if st.button("📥 Générer Excel", use_container_width=True, key="btn_export_global"):
+                with st.spinner("Récupération..."):
+                    prods_db = all_produits_for_vendeur(vendeur_export)
+                    # Ajoute produits session non encore en DB
+                    noms_db = [p.get("produit","") for p in prods_db]
+                    for p in st.session_state.produits_liste:
+                        if p.get("produit") not in noms_db:
+                            prods_db.append(p)
+                    if not prods_db:
+                        st.warning(f"Aucun produit pour {vendeur_export}.")
+                    else:
+                        buf   = build_excel(prods_db, vendeur_export)
+                        slug  = vendeur_export.replace(" ","_")[:15]
+                        ts    = datetime.now().strftime("%Y%m%d_%H%M")
+                        fname = f"ECRA_{slug}_{ts}.xlsx"
+                        st.download_button(
+                            f"⬇️ {fname}", data=buf, file_name=fname,
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="dl_excel_global"
+                        )
+                        st.success(f"✅ {len(prods_db)} produit(s)")
+        else:
+            st.caption("Aucun vendeur en base.")
+    else:
+        all_prods = st.session_state.produits_liste
+        if all_prods:
+            vnd = st.session_state.vendeur or "Vendeur"
+            if st.button("📥 Exporter session", use_container_width=True, key="btn_export_local"):
+                buf = build_excel(all_prods, vnd)
+                ts  = datetime.now().strftime("%Y%m%d_%H%M")
+                fname = f"ECRA_{vnd[:10]}_{ts}.xlsx"
+                st.download_button(f"⬇️ {fname}", data=buf, file_name=fname,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="dl_excel_local")
+        else:
+            st.caption("Aucun produit en session.")
 
 # ═══════════════════════════════════════════════════════════════════
 # ÉTAPE 1
@@ -702,8 +896,6 @@ elif st.session_state.etape == 7:
             else:
                 st.session_state.produits_liste.append(cur_p)
                 st.success(f"✅ **{st.session_state.produit}** ajouté — {len(st.session_state.produits_liste)} produit(s) en session.")
-
-            # Auto-save session + produit en DB
             if db_available():
                 state_dict = {k: st.session_state.get(k)
                               for k in ["vendeur","etape","produit","lien_fournisseur",
@@ -724,115 +916,17 @@ elif st.session_state.etape == 7:
         already   = [p["produit"] for p in all_prods]
         if st.session_state.produit and st.session_state.produit not in already:
             all_prods.append(cur_p)
-
-        if st.button(f"📥 Exporter Excel — {len(all_prods)} produit(s)", use_container_width=True, disabled=len(all_prods)==0):
-            def fx(h): return PatternFill("solid", start_color=h, fgColor=h)
-            def fb(bold=False,color="FFFFFF",size=9): return Font(name="Arial",bold=bold,color=color,size=size)
-            def fd():
-                s=Side(style="thin",color="BBBBBB"); return Border(left=s,right=s,top=s,bottom=s)
-            def fc(): return Alignment(horizontal="center",vertical="center",wrap_text=True)
-            def fl(): return Alignment(horizontal="left",  vertical="center",wrap_text=True)
-
-            wb2 = Workbook(); ws2 = wb2.active; ws2.title = "Scoring"
-            ws2.sheet_view.showGridLines = False
-            vnd = st.session_state.vendeur or "Vendeur"
-
-            ws2.merge_cells("A1:AB1")
-            ws2["A1"].value = f"RAPPORT D'ANALYSE — {vnd} | Niche Chien 2026 | ECRA"
-            ws2["A1"].font = fb(True,size=13); ws2["A1"].fill = fx("1E2761"); ws2["A1"].alignment = fc()
-            ws2.row_dimensions[1].height = 34
-
-            ws2.merge_cells("A2:AB2")
-            ws2["A2"].value = f"Généré le {datetime.now().strftime('%d/%m/%Y %H:%M')} | {len(all_prods)} produit(s)"
-            ws2["A2"].font = Font(name="Arial",italic=True,color="D4A843",size=9)
-            ws2["A2"].fill = fx("1E2761"); ws2["A2"].alignment = fl()
-            ws2.row_dimensions[2].height = 18
-
-            for rng,lbl,bg,fg in [("A3:F3","A — IDENTIFICATION","1E2761","FFFFFF"),
-                                    ("G3:M3","B — PRÉ-SCREENING","D4A843","1E2761"),
-                                    ("N3:W3","C — SCORING /100","2C3E50","FFFFFF"),
-                                    ("X3:Y3","D — RÉSULTAT","1A7A3A","FFFFFF"),
-                                    ("Z3:AB3","E — NOTES","546E7A","FFFFFF")]:
-                ws2.merge_cells(rng); c=ws2[rng.split(":")[0]]
-                c.value=lbl; c.font=fb(True,fg,8); c.fill=fx(bg); c.alignment=fc(); c.border=fd()
-            ws2.row_dimensions[3].height = 20
-
-            hdrs = ["Produit","Lien fournisseur","Sous-niche","Problème résolu","Cible client","Bénéfice principal",
-                    "① Google Trends","Mot-clé #1","Mot-clé #2","② Amazon BSR","③ WinningHunter","④ Minea","Pré-screen",
-                    "Demande marché /20","Potentiel pub /15","Marge brute /15","Momentum /10",
-                    "Saturation /10","Faisabilité /10","Différenciation /5","Brandabilité /5","Scalabilité /5","PL /5",
-                    "Score /100","Verdict","Source","Commentaire","Date"]
-            bg_h = {**{i:"1E2761" for i in range(1,7)},**{i:"D4A843" for i in range(7,14)},
-                    **{i:"2C3E50" for i in range(14,24)},**{i:"1A7A3A" for i in range(24,26)},
-                    **{i:"546E7A" for i in range(26,29)}}
-            fg_h = {i:("1E2761" if bg_h.get(i)=="D4A843" else "FFFFFF") for i in range(1,29)}
-            for i,h in enumerate(hdrs,1):
-                c=ws2[f"{get_column_letter(i)}4"]; c.value=h
-                c.font=fb(True,fg_h.get(i,"FFFFFF"),8); c.fill=fx(bg_h.get(i,"2C3E50"))
-                c.alignment=fc(); c.border=fd()
-            ws2.row_dimensions[4].height = 28
-
-            left_ci = {1,2,4,5,6,8,9,26,27,28}
-            for ri, p in enumerate(all_prods, 5):
-                row_d = [p["produit"],p["lien_fournisseur"],p["sous_niche"],p["probleme"],p["cible"],p["benefice"],
-                         p["gt"],p["gt_kw1"],p["gt_kw2"],p["bsr"],p["wh"],p["minea"],p["pre_screen"],
-                         p["demande_marche"],p["potentiel_pub"],p["marge_brute"],p["momentum_tendance"],
-                         p["saturation"],p["faisabilite_logistique"],p["differenciation"],p["brandabilite"],
-                         p["scalabilite"],p["private_label"],p["score"],p["verdict"],
-                         p["source"],p["commentaire"],p["date"]]
-                bg_r = "F0F2F8" if ri%2==0 else "FFFFFF"
-                for ci,val in enumerate(row_d,1):
-                    c=ws2[f"{get_column_letter(ci)}{ri}"]; c.value=val; c.border=fd()
-                    c.fill=fx(bg_r); c.font=fb(False,"2C3E50",9)
-                    c.alignment=fl() if ci in left_ci else fc()
-                vc = VERDICT_COLORS.get(p["verdict"],"2C3E50")
-                ws2[f"X{ri}"].font=fb(True,"FFFFFF",11); ws2[f"X{ri}"].fill=fx(vc)
-                ws2[f"Y{ri}"].font=fb(True,"FFFFFF",9);  ws2[f"Y{ri}"].fill=fx(vc)
-                ws2.row_dimensions[ri].height = 22
-
-            if all_prods:
-                ws2.conditional_formatting.add(f"X5:X{4+len(all_prods)}", ColorScaleRule(
-                    start_type="num",start_value=0,start_color="C0392B",
-                    mid_type="num",mid_value=65,mid_color="F39C12",
-                    end_type="num",end_value=100,end_color="27AE60"))
-
-            for i,w in enumerate([22,26,15,20,15,20,12,15,15,12,14,12,18,10,10,10,10,10,10,9,9,9,10,12,22,22,30,14],1):
-                ws2.column_dimensions[get_column_letter(i)].width = w
-            ws2.freeze_panes = "A5"
-
-            # Summary sheet
-            ws3 = wb2.create_sheet("Résumé"); ws3.sheet_view.showGridLines = False
-            ws3.merge_cells("A1:E1"); ws3["A1"].value = f"RÉSUMÉ — {vnd}"
-            ws3["A1"].font=fb(True,size=12); ws3["A1"].fill=fx("1E2761"); ws3["A1"].alignment=fc()
-            ws3.row_dimensions[1].height = 30
-            for i,h in enumerate(["Produit","Sous-niche","Score /100","Verdict","Pré-screen"],1):
-                c=ws3[f"{get_column_letter(i)}2"]; c.value=h
-                c.font=fb(True); c.fill=fx("2C3E50"); c.alignment=fc(); c.border=fd()
-            ws3.row_dimensions[2].height = 22
-            for ri,p in enumerate(all_prods,3):
-                vc=VERDICT_COLORS.get(p["verdict"],"2C3E50")
-                for ci,val in enumerate([p["produit"],p["sous_niche"],p["score"],p["verdict"],p["pre_screen"]],1):
-                    c=ws3[f"{get_column_letter(ci)}{ri}"]; c.value=val; c.border=fd()
-                    c.font=fb(ci in [3,4],"FFFFFF" if ci in [3,4] else "2C3E50",9)
-                    c.fill=fx(vc) if ci in [3,4] else fx("F0F2F8" if ri%2==0 else "FFFFFF")
-                    c.alignment=fc()
-                ws3.row_dimensions[ri].height = 20
-            for i,w in enumerate([24,18,12,22,18],1): ws3.column_dimensions[get_column_letter(i)].width = w
-
-            # Save to memory (compatible cloud + local)
-            import io
-            buffer = io.BytesIO()
-            wb2.save(buffer)
-            buffer.seek(0)
-            slug = (st.session_state.vendeur or "vendeur").replace(" ","_")[:15]
-            ts   = datetime.now().strftime("%Y%m%d_%H%M")
+        vnd = st.session_state.vendeur or "Vendeur"
+        if st.button(f"📥 Exporter Excel ({len(all_prods)} produit(s))",
+                     use_container_width=True, disabled=len(all_prods)==0, key="btn_exp7"):
+            buf   = build_excel(all_prods, vnd)
+            slug  = vnd.replace(" ","_")[:15]
+            ts    = datetime.now().strftime("%Y%m%d_%H%M")
             fname = f"ECRA_{slug}_{ts}.xlsx"
-            st.download_button(
-                f"⬇️ Télécharger — {fname}", buffer,
-                file_name=fname,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-            st.success(f"✅ {len(all_prods)} produit(s) prêts — clique sur le bouton ci-dessus pour télécharger.")
+            st.download_button(f"⬇️ {fname}", data=buf, file_name=fname,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="dl_exp7")
+            st.success(f"✅ {len(all_prods)} produit(s) — utilise aussi le bouton 📊 dans la sidebar pour exporter par vendeur.")
 
     st.markdown("---")
     c1, c2 = st.columns(2)
