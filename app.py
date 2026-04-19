@@ -259,6 +259,9 @@ PROD_DEF = dict(
     scores={k: 0 for k, *_ in SCORING_CRITERIA},
     source="", commentaire="", trends_data=None,
     trends_regions=None, trends_interest=None,
+    gt_keywords=["","","","",""],
+    gt_kw_scores={}, gt_kw_tendances={}, gt_top3=[],
+    gt_top_pays="", gt_usa_score=50,
 )
 if "etape"          not in st.session_state: st.session_state.etape = 1
 if "vendeur"        not in st.session_state: st.session_state.vendeur = ""
@@ -519,134 +522,189 @@ if st.session_state.etape == 1:
 # ÉTAPE 2
 # ═══════════════════════════════════════════════════════════════════
 elif st.session_state.etape == 2:
-    banner("B — ① GOOGLE TRENDS — Tendance favorable ?")
-    st.caption("Ouvre Google Trends avec les liens ci-dessous, observe les courbes, puis remplis ce que tu vois.")
+    banner("B — ① GOOGLE TRENDS — Analyse multi-mots-clés")
+    st.caption("Entre jusqu'à 5 mots-clés (mix français/anglais), ouvre les liens, puis note chacun pour identifier le Top 3.")
 
-    # Mots-clés
-    col1, col2 = st.columns(2)
-    with col1:
-        st.session_state.gt_kw1 = st.text_input(
-            "Mot-clé #1 — français *", st.session_state.gt_kw1,
-            placeholder="ex: anti aboiement chien")
-    with col2:
-        st.session_state.gt_kw2 = st.text_input(
-            "Mot-clé #2 — anglais *", st.session_state.gt_kw2,
-            placeholder="ex: anti bark collar")
+    # ── Saisie multi-mots-clés ──────────────────────────────────────
+    st.markdown(f"<b style='color:{NAVY};'>🔑 Tes mots-clés</b>", unsafe_allow_html=True)
+    st.caption("Entre les variantes du produit : terme générique, marque concurrente, terme anglais, terme longue traîne…")
 
-    # Liens directs Google Trends
-    kw1 = st.session_state.gt_kw1.strip() if st.session_state.gt_kw1 else ""
-    kw2 = st.session_state.gt_kw2.strip() if st.session_state.gt_kw2 else ""
+    kw_inputs = []
+    cols = st.columns(5)
+    kw_defaults = st.session_state.get("gt_keywords", ["","","","",""])
+    if len(kw_defaults) < 5:
+        kw_defaults += [""] * (5 - len(kw_defaults))
 
-    if kw1 and kw2:
-        q_both  = (kw1 + "," + kw2).replace(" ", "+")
-        q_kw2   = kw2.replace(" ", "+")
-        url_world   = f"https://trends.google.fr/trends/explore?q={q_both}&date=today+12-m"
-        url_us      = f"https://trends.google.fr/trends/explore?q={q_both}&geo=US&date=today+12-m"
-        url_fr      = f"https://trends.google.fr/trends/explore?q={q_both}&geo=FR&date=today+12-m"
-        url_regions = f"https://trends.google.fr/trends/explore?q={q_kw2}&date=today+12-m"
+    for i, col in enumerate(cols):
+        with col:
+            val = st.text_input(
+                f"Mot-clé {i+1}" + (" *" if i < 2 else " (opt.)"),
+                kw_defaults[i],
+                key=f"gt_kw_input_{i}",
+                placeholder=["collier anti aboiement","anti bark collar","bark collar dog",
+                             "collier dressage chien","dog training collar"][i]
+            )
+            kw_inputs.append(val.strip())
 
+    st.session_state["gt_keywords"] = kw_inputs
+    # Compat avec gt_kw1/gt_kw2 utilisés dans la sauvegarde
+    st.session_state.gt_kw1 = kw_inputs[0]
+    st.session_state.gt_kw2 = kw_inputs[1]
+
+    kws_actifs = [k for k in kw_inputs if k]
+
+    if len(kws_actifs) < 2:
+        st.warning("Entre au moins 2 mots-clés pour comparer.")
+    else:
         st.markdown("---")
-        st.markdown(f"<b style='color:{NAVY};'>🔗 Ouvre ces liens dans de nouveaux onglets :</b>",
+        # ── Liens Google Trends ──────────────────────────────────────
+        st.markdown(f"<b style='color:{NAVY};'>🔗 Liens Google Trends — ouvre dans de nouveaux onglets</b>",
                     unsafe_allow_html=True)
 
+        # Google Trends accepte max 5 termes comparés
+        q_all  = ",".join(kws_actifs[:5]).replace(" ", "+")
+        q_best = kws_actifs[0].replace(" ", "+")  # terme principal pour top pays
+
+        btn_style = lambda bg, fg="#FFFFFF": (
+            f"display:block;background:{bg};color:{fg};text-align:center;"
+            f"padding:8px 4px;border-radius:6px;text-decoration:none;"
+            f"font-weight:600;font-size:.82rem;margin-bottom:6px;"
+        )
+
         col_a, col_b, col_c, col_d = st.columns(4)
+        s_navy = btn_style(NAVY)
+        s_usa  = btn_style("#B22222")
+        s_fr   = btn_style("#0055A4")
+        s_gold = btn_style(GOLD, NAVY)
         with col_a:
-            st.markdown(
-                f"<a href='{url_world}' target='_blank' style='display:block;background:{NAVY};"
-                f"color:white;text-align:center;padding:8px;border-radius:6px;text-decoration:none;"
-                f"font-weight:600;font-size:.85rem;'>🌍 Mondial</a>",
-                unsafe_allow_html=True)
+            st.markdown(f"<a href='https://trends.google.fr/trends/explore?q={q_all}&date=today+12-m' target='_blank' style='{s_navy}'>🌍 Comparaison<br>Mondiale</a>", unsafe_allow_html=True)
         with col_b:
-            st.markdown(
-                f"<a href='{url_us}' target='_blank' style='display:block;background:#B22222;"
-                f"color:white;text-align:center;padding:8px;border-radius:6px;text-decoration:none;"
-                f"font-weight:600;font-size:.85rem;'>🇺🇸 USA</a>",
-                unsafe_allow_html=True)
+            st.markdown(f"<a href='https://trends.google.fr/trends/explore?q={q_all}&geo=US&date=today+12-m' target='_blank' style='{s_usa}'>🇺🇸 Comparaison<br>USA</a>", unsafe_allow_html=True)
         with col_c:
-            st.markdown(
-                f"<a href='{url_fr}' target='_blank' style='display:block;background:#0055A4;"
-                f"color:white;text-align:center;padding:8px;border-radius:6px;text-decoration:none;"
-                f"font-weight:600;font-size:.85rem;'>🇫🇷 France</a>",
-                unsafe_allow_html=True)
+            st.markdown(f"<a href='https://trends.google.fr/trends/explore?q={q_all}&geo=FR&date=today+12-m' target='_blank' style='{s_fr}'>🇫🇷 Comparaison<br>France</a>", unsafe_allow_html=True)
         with col_d:
+            st.markdown(f"<a href='https://trends.google.fr/trends/explore?q={q_best}&date=today+12-m' target='_blank' style='{s_gold}'>🏆 Top pays<br>(terme #1)</a>", unsafe_allow_html=True)
+
+        st.markdown("---")
+
+        # ── Notation de chaque mot-clé ────────────────────────────────
+        st.markdown(f"<b style='color:{NAVY};'>📊 Note chaque mot-clé d'après ce que tu vois</b>",
+                    unsafe_allow_html=True)
+        st.caption("Volume = hauteur moyenne de la courbe. Tendance = direction sur 12 mois.")
+
+        kw_scores = st.session_state.get("gt_kw_scores", {})
+        kw_tendances = st.session_state.get("gt_kw_tendances", {})
+
+        for kw in kws_actifs:
+            with st.container():
+                st.markdown(
+                    f"<div style='background:#EEF0FA;border-left:4px solid {GOLD};"
+                    f"padding:6px 12px;border-radius:4px;margin-bottom:4px;'>"
+                    f"<b style='color:{NAVY};'>🔑 {kw}</b></div>",
+                    unsafe_allow_html=True)
+                col1, col2 = st.columns(2)
+                with col1:
+                    score = st.slider(
+                        f"Volume observé (0=rien, 100=très fort)",
+                        0, 100,
+                        kw_scores.get(kw, 50), 5,
+                        key=f"gt_score_{kw}"
+                    )
+                    kw_scores[kw] = score
+                with col2:
+                    tendance = st.selectbox(
+                        f"Tendance 12 mois",
+                        ["📈 Montante","➡️ Stable","📉 Déclinante","⚡ Pic isolé"],
+                        index=["📈 Montante","➡️ Stable","📉 Déclinante","⚡ Pic isolé"].index(
+                            kw_tendances.get(kw, "➡️ Stable")),
+                        key=f"gt_tendance_{kw}"
+                    )
+                    kw_tendances[kw] = tendance
+
+        st.session_state["gt_kw_scores"]    = kw_scores
+        st.session_state["gt_kw_tendances"] = kw_tendances
+
+        # ── Calcul Top 3 automatique ──────────────────────────────────
+        tendance_bonus = {"📈 Montante": 20, "➡️ Stable": 10, "📉 Déclinante": -20, "⚡ Pic isolé": -10}
+        classement = []
+        for kw in kws_actifs:
+            vol  = kw_scores.get(kw, 0)
+            tend = kw_tendances.get(kw, "➡️ Stable")
+            score_total = vol + tendance_bonus.get(tend, 0)
+            classement.append((kw, vol, tend, max(0, min(100, score_total))))
+
+        classement.sort(key=lambda x: x[3], reverse=True)
+        top3 = classement[:3]
+
+        st.markdown("---")
+        st.markdown(
+            f"<div style='background:{NAVY};color:white;padding:12px 16px;border-radius:8px;"
+            f"margin-bottom:12px;'><b style='color:{GOLD};font-size:1rem;'>🏆 TOP 3 MOTS-CLÉS</b></div>",
+            unsafe_allow_html=True)
+
+        medals = ["🥇","🥈","🥉"]
+        for rank, (kw, vol, tend, sc) in enumerate(top3):
+            bar_w = min(100, sc)
+            bar_c = GREEN if sc >= 70 else ("#E67E22" if sc >= 40 else RED)
             st.markdown(
-                f"<a href='{url_regions}' target='_blank' style='display:block;background:{GOLD};"
-                f"color:{NAVY};text-align:center;padding:8px;border-radius:6px;text-decoration:none;"
-                f"font-weight:600;font-size:.85rem;'>🏆 Top pays</a>",
+                f"<div style='background:#F8F9FC;border-radius:8px;padding:10px 14px;margin-bottom:8px;'>"
+                f"<div style='display:flex;justify-content:space-between;align-items:center;'>"
+                f"<span style='font-size:1rem;'>{medals[rank]} <b style='color:{NAVY};'>{kw}</b></span>"
+                f"<span style='font-size:.85rem;color:{bar_c};font-weight:700;'>Score {sc}/100</span></div>"
+                f"<div style='font-size:.8rem;color:#888;margin:4px 0;'>{tend} · Volume observé : {vol}/100</div>"
+                f"<div style='background:#E0E4F0;border-radius:4px;height:6px;'>"
+                f"<div style='width:{bar_w}%;background:{bar_c};height:6px;border-radius:4px;'></div></div>"
+                f"</div>",
                 unsafe_allow_html=True)
 
-    st.markdown("---")
+        # Sauvegarde du top 3 dans la session
+        st.session_state["gt_top3"] = [kw for kw, *_ in top3]
+        # Met à jour gt_kw1 et gt_kw2 avec les 2 meilleurs
+        if len(top3) >= 1: st.session_state.gt_kw1 = top3[0][0]
+        if len(top3) >= 2: st.session_state.gt_kw2 = top3[1][0]
 
-    # Guide de lecture
-    with st.expander("📖 Comment lire les courbes Google Trends ?", expanded=False):
-        st.markdown(f"""
-<div style='background:#EEF0FA;padding:12px 16px;border-radius:8px;color:{DGRAY};'>
-<b style='color:{NAVY};'>Ce que tu cherches sur chaque lien :</b><br><br>
-<b>🌍 Mondial & 🇺🇸 USA</b> — Regarde la courbe sur 12 mois :<br>
-&nbsp;&nbsp;• Montante ou stable → signal positif<br>
-&nbsp;&nbsp;• Déclinante → signal négatif<br>
-&nbsp;&nbsp;• Pic isolé sans suite → produit viral éphémère, attention<br><br>
-<b>🏆 Top pays</b> — Scrolle vers "Intérêt par sous-région" :<br>
-&nbsp;&nbsp;• Note les 2-3 premiers pays<br>
-&nbsp;&nbsp;• Si USA dans le top → fort potentiel de transfert EU<br><br>
-<b style='color:{RED};'>GO ✅ si :</b> courbe montante OU stable sur 12 mois, USA présent dans le top pays<br>
-<b style='color:{RED};'>NO-GO ❌ si :</b> courbe en baisse, volume trop faible ("données insuffisantes")
-</div>""", unsafe_allow_html=True)
+        # ── Observations complémentaires ─────────────────────────────
+        st.markdown("---")
+        col1, col2 = st.columns(2)
+        with col1:
+            usa_top = st.selectbox(
+                "USA dans le top pays ? (lien 🏆)",
+                ["— Sélectionne","🥇 Oui — Top 3","✅ Oui — Top 10","❌ Non"],
+                key="gt_usa_top"
+            )
+        with col2:
+            top_pays = st.text_input(
+                "Top 2-3 pays observés",
+                st.session_state.get("gt_top_pays",""),
+                placeholder="ex: USA, Australie, Canada",
+                key="gt_top_pays_input"
+            )
+        st.session_state["gt_top_pays"] = top_pays
 
-    # Saisie manuelle de ce que l'utilisateur observe
-    st.markdown(f"<b style='color:{NAVY};'>📝 Ce que tu observes :</b>", unsafe_allow_html=True)
+        # Verdict global
+        best_sc = top3[0][3] if top3 else 0
+        best_tend = top3[0][2] if top3 else ""
+        usa_ok = usa_top in ["🥇 Oui — Top 3","✅ Oui — Top 10"]
+        tend_ok = best_tend in ["📈 Montante","➡️ Stable"]
 
-    col1, col2 = st.columns(2)
-    with col1:
-        tendance_mondiale = st.selectbox(
-            "Tendance mondiale (courbe 12 mois) *",
-            ["— Sélectionne", "📈 Montante", "➡️ Stable", "📉 Déclinante", "⚡ Pic isolé sans suite"],
-            key="gt_tendance"
-        )
-        usa_top = st.selectbox(
-            "USA dans le top pays ?",
-            ["— Sélectionne", "🥇 Oui — Top 3", "✅ Oui — Top 10", "❌ Non"],
-            key="gt_usa_top"
-        )
-    with col2:
-        top_pays = st.text_input(
-            "Top 2-3 pays observés",
-            st.session_state.get("gt_top_pays", ""),
-            placeholder="ex: USA, Australie, Canada",
-            key="gt_top_pays_input"
-        )
-        usa_score = st.slider("Score USA estimé (0-100)", 0, 100,
-                              st.session_state.get("gt_usa_score", 50), 5,
-                              key="gt_usa_score_slider")
+        if usa_top != "— Sélectionne":
+            if tend_ok and usa_ok and best_sc >= 50:
+                st.success(f"✅ Fort potentiel — meilleur mot-clé : **{top3[0][0]}** ({best_sc}/100) · USA présent")
+            elif tend_ok and best_sc >= 40:
+                st.warning(f"⚠️ Signal modéré — meilleur : **{top3[0][0]}** ({best_sc}/100) · Confirmer sur Amazon BSR")
+            else:
+                st.error(f"❌ Signal faible — meilleur score : {best_sc}/100 · Reconsidérer le produit")
 
-    # Sauvegarder ces champs dans session state
-    st.session_state["gt_top_pays"]   = top_pays
-    st.session_state["gt_usa_score"]  = usa_score
-
-    # Verdict automatique basé sur les sélections
-    tendance_ok = tendance_mondiale in ["📈 Montante", "➡️ Stable"]
-    usa_ok      = usa_top in ["🥇 Oui — Top 3", "✅ Oui — Top 10"]
-
-    if tendance_mondiale != "— Sélectionne":
-        if tendance_ok and usa_ok:
-            st.success("✅ Signaux favorables — tendance solide ET présence USA → fort potentiel de transfert EU")
-        elif tendance_ok and not usa_ok:
-            st.warning("⚠️ Tendance correcte mais USA absent — demande EU à confirmer sur Amazon BSR")
-        elif not tendance_ok and usa_ok:
-            st.warning("⚠️ USA présent mais tendance mondiale faible — produit peut-être en déclin")
-        else:
-            st.error("❌ Tendance défavorable — vérifier avec un terme plus générique avant de décider")
-
-    st.session_state.gt_note = st.text_area(
-        "📝 Notes libres", st.session_state.gt_note, height=55,
-        placeholder="ex: Forte hausse USA depuis nov 2025, France encore faible...")
+        st.session_state.gt_note = st.text_area(
+            "📝 Notes libres", st.session_state.gt_note, height=55,
+            placeholder="ex: 'anti bark collar' domine aux USA, 'collier anti aboiement' stable en France...")
 
     st.markdown("---")
     c1, c2 = st.columns(2)
     with c1:
         if st.button("✅ GO TENDANCE", use_container_width=True):
-            if not kw1 or not kw2:
-                st.error("Remplis les deux mots-clés avant de valider.")
+            if len(kws_actifs) < 2:
+                st.error("Entre au moins 2 mots-clés.")
             else:
                 st.session_state.gt_go = True; nav(3)
     with c2:
